@@ -1,5 +1,6 @@
 import ROOT
 import time
+import sys
 
 class hit:
     def __init__(self, board, channel, low_gain, high_gain, timestamp, trigger_id):
@@ -60,37 +61,53 @@ class online_monitor:
         
         self.low_gain_histograms = []
         self.high_gain_histograms = []
+        self.gain_correlations = []
         self.canvases = []
 
         # Create histograms
         for i in range(caen_units):
             caen_lg_histograms = []
             caen_hg_histograms = []
+            caen_correlation_histograms = []
             for j in range(channels):
                 lg_histogram = ROOT.TH1F(f'caen_{i}_ch_{j}_lg', f'CAEN {i} Channel {j} Low Gain', 4096, 0, 4096)
                 hg_histogram = ROOT.TH1F(f'caen_{i}_ch_{j}_hg', f'CAEN {i} Channel {j} High Gain', 4096, 0, 4096)
+                correlation_hist = ROOT.TH2F(f'caen_{i}_ch_{j}_correlation', f'CAEN {i} Channel {j} Correlation;High Gain;Low Gain', 512, 0, 4096, 256, 0, 512)
                 self.server.Register(f'/individual/low_gain/caen_{i}', lg_histogram)
                 self.server.Register(f'/individual/high_gain/caen_{i}', hg_histogram)
+                self.server.Register(f'/individual/correlation/caen_{i}', correlation_hist)
                 caen_lg_histograms.append(lg_histogram)
                 caen_hg_histograms.append(hg_histogram)
+                caen_correlation_histograms.append(correlation_hist)
+                
 
             self.low_gain_histograms.append(caen_lg_histograms)
             self.high_gain_histograms.append(caen_hg_histograms)
+            self.gain_correlations.append(caen_correlation_histograms)
 
         for i in range(caen_units):
             lg_canvas = ROOT.TCanvas(f'caen_{i}_lg', f'CAEN {i} Low Gain', 1200, 800)
             hg_canvas = ROOT.TCanvas(f'caen_{i}_hg', f'CAEN {i} High Gain', 1200, 800)
+            corr_canvas = ROOT.TCanvas(f'caen_{i}_corr', f'CAEN {i} Correlation', 1200, 800)
             lg_canvas.Divide(8, 8, 0, 0)
             hg_canvas.Divide(8, 8, 0, 0)
+            corr_canvas.Divide(8, 8, 0, 0)
             for j in range(channels):
                 lg_canvas.cd(j+1)
                 self.low_gain_histograms[i][j].Draw()
+                ROOT.gPad.SetLogy()
                 hg_canvas.cd(j+1)
+                ROOT.gPad.SetLogy()
                 self.high_gain_histograms[i][j].Draw()
+                corr_canvas.cd(j+1)
+                self.gain_correlations[i][j].Draw('col')
+
             self.server.Register(f'/overview/low_gain', lg_canvas)
             self.server.Register(f'/overview/high_gain', hg_canvas)
+            self.server.Register(f'/overview/correlation', corr_canvas)
             self.canvases.append(lg_canvas)
             self.canvases.append(hg_canvas)
+            self.canvases.append(corr_canvas)
         
 
     def event_loop(self):
@@ -99,21 +116,24 @@ class online_monitor:
             for hits in parser:
                 self.server.ProcessRequests()
                 if hits is None:
-                    print('sleeping')
-                    time.sleep(1)
+                    # print('sleeping')
+                    time.sleep(0.2)
                     continue
+                # print('reading')
                 for hit in hits:
                     self.low_gain_histograms[hit.board][hit.channel].Fill(hit.low_gain)
                     self.high_gain_histograms[hit.board][hit.channel].Fill(hit.high_gain)
+                    self.gain_correlations[hit.board][hit.channel].Fill(hit.high_gain, hit.low_gain)
                 # events.append(hits)
         
 
     
-def main():
+def main(argv):
     # monitor = online_monitor('data/Run68_list.txt')
-    monitor = online_monitor('/Volumes/ProtzmanSSD/data/epic/caen_sep2024/Run68_list.txt')
+    run_number = argv[1]
+    monitor = online_monitor(f'/home/lfhcal/Downloads/Janus_5202_3.6.0_20240514_linux/bin/DataFiles/Run{run_number}_list.txt')
     monitor.event_loop()
     pass
 
 if __name__ == '__main__':
-    main()
+    main(sys.argv)
