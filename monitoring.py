@@ -1,6 +1,7 @@
+import sys
+sys.argv.append('-b') # load root in batch mode
 import ROOT
 import time
-import sys
 
 class hit:
     def __init__(self, board, channel, low_gain, high_gain, timestamp, trigger_id):
@@ -62,6 +63,9 @@ class online_monitor:
         self.low_gain_histograms = []
         self.high_gain_histograms = []
         self.gain_correlations = []
+
+        self.num_events = []
+
         self.canvases = []
 
         # Create histograms
@@ -108,6 +112,23 @@ class online_monitor:
             self.canvases.append(lg_canvas)
             self.canvases.append(hg_canvas)
             self.canvases.append(corr_canvas)
+
+        multi_graph = ROOT.TMultiGraph()
+        for i in range(caen_units):
+            number_events = ROOT.TGraph()
+            number_events.SetTitle(f'CAEN {i} Number of Events')
+            number_events.SetName(f'caen_{i}_num_events')
+            self.num_events.append(number_events)
+            # ROOT.gROOT.Add(number_events)
+            multi_graph.Add(number_events)
+        
+        canvas = ROOT.TCanvas('num_events', 'Number of Events', 1200, 800)
+        canvas.cd()
+        self.canvases.append(canvas)
+        multi_graph.Draw('AP')
+        self.num_events.append(multi_graph)
+        self.server.Register('/overview/num_events', canvas)
+
         
 
     def event_loop(self):
@@ -116,10 +137,12 @@ class online_monitor:
             for hits in parser:
                 self.server.ProcessRequests()
                 if hits is None:
-                    # print('sleeping')
+                    print('sleeping')
                     time.sleep(0.2)
                     continue
-                # print('reading')
+                print('reading')
+                t = ROOT.TDatime().Convert()
+                self.num_events[hits[0].board].SetPoint(self.num_events[hits[0].board].GetN(), t, hits[0].trigger_id)
                 for hit in hits:
                     self.low_gain_histograms[hit.board][hit.channel].Fill(hit.low_gain)
                     self.high_gain_histograms[hit.board][hit.channel].Fill(hit.high_gain)
@@ -131,7 +154,8 @@ class online_monitor:
 def main(argv):
     # monitor = online_monitor('data/Run68_list.txt')
     run_number = argv[1]
-    monitor = online_monitor(f'/home/lfhcal/Downloads/Janus_5202_3.6.0_20240514_linux/bin/DataFiles/Run{run_number}_list.txt')
+    # monitor = online_monitor(f'/home/lfhcal/Downloads/Janus_5202_3.6.0_20240514_linux/bin/DataFiles/Run{run_number}_list.txt')
+    monitor = online_monitor(f'data/Run{run_number}_list.txt')
     monitor.event_loop()
     pass
 
