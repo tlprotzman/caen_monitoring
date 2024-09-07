@@ -41,6 +41,22 @@ class hit:
 
         self.z = self.board * 8 + (7 - int(self.channel / 8))
 
+class event:
+    def __init__(self, event_number):
+        self.event_number = event_number
+        self.hits = [None] * 512
+        self.hits_found = 0
+        self.max_adc = 0
+
+    def add_hit(self, hit):
+        self.hits[hit.channel + 64 * hit.board] = hit
+        self.hits_found += 1
+        if hit.high_gain > self.max_adc:
+            self.max_adc = hit.high_gain
+
+    def is_complete_event(self):
+        return self.hits_found == 512
+
     
 
 class file_parser:
@@ -93,6 +109,7 @@ class file_parser:
 
 class online_monitor:
     def __init__(self, file_path, run_number, caen_units=8, channels=64):
+        self.run_number = run_number
         # Set up the output file
         output_path = f"output/run{run_number}"
         if not os.path.exists(output_path):
@@ -100,11 +117,14 @@ class online_monitor:
         
         self.output_file = ROOT.TFile(f"{output_path}/run{run_number}.root", "RECREATE")
 
+        self.events = {}
 
         self.file_path = file_path
         self.caen_units = caen_units
         self.channels = channels
-        self.server = ROOT.THttpServer('http:54321')
+
+        monitoring_port = int(os.environ.get('MONITORING_PORT', 54321))
+        self.server = ROOT.THttpServer(f'http:{monitoring_port}')
         
         self.low_gain_histograms = []
         self.high_gain_histograms = []
@@ -127,6 +147,11 @@ class online_monitor:
 
         self.canvases = []
 
+        self.text = ROOT.TLatex()
+        self.text.SetTextSize(0.1)
+        # self.SetFont(42)
+        self.text.SetTextAlign(33)
+
         # Create histograms
         for i in range(caen_units):
             caen_lg_histograms = []
@@ -136,8 +161,8 @@ class online_monitor:
 
 
             for j in range(channels):
-                lg_histogram = ROOT.TH1F(f'caen_{i}_ch_{j}_lg', f'CAEN {i} Channel {j} Low Gain', 4096, 0, 4096)
-                hg_histogram = ROOT.TH1F(f'caen_{i}_ch_{j}_hg', f'CAEN {i} Channel {j} High Gain', 4096, 0, 4096)
+                lg_histogram = ROOT.TH1F(f'caen_{i}_ch_{j}_lg', f'CAEN {i} Channel {j} Low Gain', 4096//4, 0, 4096)
+                hg_histogram = ROOT.TH1F(f'caen_{i}_ch_{j}_hg', f'CAEN {i} Channel {j} High Gain', 4096//4, 0, 4096)
                 cb_histogram = ROOT.TH1F(f'caen_{i}_ch_{j}_cb', f'CAEN {i} Channel {j} Combined Gain', 40001, 0, 40001)
                 correlation_hist = ROOT.TH2F(f'caen_{i}_ch_{j}_correlation', f'CAEN {i} Channel {j} Correlation;High Gain;Low Gain', 512, 0, 4096, 256, 0, 512)
                 self.server.Register(f'/individual/low_gain/caen_{i}', lg_histogram)
@@ -168,18 +193,22 @@ class online_monitor:
                 # Draw low gain
                 lg_canvas.cd(j+1)
                 self.low_gain_histograms[i][j].Draw()
+                self.label_channel(i, j)
                 ROOT.gPad.SetLogy()
                 # Draw high gain
                 hg_canvas.cd(j+1)
                 ROOT.gPad.SetLogy()
                 self.high_gain_histograms[i][j].Draw()
+                self.label_channel(i, j)
                 # Draw combined gain
                 cb_canvas.cd(j+1)
                 ROOT.gPad.SetLogy()
                 self.combined_gain_histograms[i][j].Draw()
+                self.label_channel(i, j)
                 # Draw correlation
                 corr_canvas.cd(j+1)
                 self.gain_correlations[i][j].Draw('col')
+                self.label_channel(i, j)
 
             self.server.Register(f'/overview/low_gain', lg_canvas)
             self.server.Register(f'/overview/high_gain', hg_canvas)
@@ -212,6 +241,7 @@ class online_monitor:
             number_events.SetLineColor(line_colors[i % 4])
             number_events.SetLineStyle(line_styles[int(i / 4)])
             number_events.SetLineWidth(2)
+            number_events.GetYaxis().SetRangeUser(0, 100000)
             legend.AddEntry(number_events, f'CAEN {i}', 'l')
             if i == 0:
                 number_events.Draw("AL")
@@ -275,10 +305,15 @@ class online_monitor:
         # self.num_events.append(multi_graph)
 
         canvas = ROOT.TCanvas('event_display', 'Event Display', 1200, 800)
-        self.event_display = ROOT.TH3F('event_display', 'Event Display', 64, 0, 64, 4, 0, 4, 2, 0, 2)
-        # self.event_display.SetMinimum(0)
-        # self.event_display.SetMaximum(4096)
+        self.event_display = ROOT.TH3F('event_display', 'Event Display', 66, 0, 66, 4, 0, 4, 2, 0, 2)
+        self.event_display.SetBinContent(1, 1, 1, 1)
+        self.event_display.SetBinContent(5, 1, 1, 40000)
+        self.event_display.SetMinimum(0)
+        self.event_display.SetMaximum(40000)
+        self.event_display.SetContour(99)
         self.event_display.Draw("BOX2Z")
+        self.event_display.SetContour(99)
+        self.event_display.SetStats(0)
         self.server.Register('/overview/event_display', canvas)
         self.canvases.append(canvas)
 
@@ -286,10 +321,15 @@ class online_monitor:
         self.event_display_comb = ROOT.TH3F('event_display_comb', 'Event Display Comb gain', 66, 0, 66, 4, 0, 4, 2, 0, 2)
         # self.event_display_comb.SetMinimum(0)
         # self.event_display_comb.SetMaximum(40000)
-        self.event_display_comb.SetStats(0);
+        self.event_display_comb.SetStats(0)
         self.event_display_comb.Draw("BOX2Z")
         self.server.Register('/overview/event_display', canvas2)
         self.canvases.append(canvas2)
+
+    def label_channel(self, caen, channel):
+        self.text.DrawLatexNDC(0.95, 0.85, f'Run {self.run_number}')
+        self.text.DrawLatexNDC(0.95, 0.75, f'CAEN {caen}')
+        self.text.DrawLatexNDC(0.95, 0.65, f'Channel {channel}')
 
     def close(self):
         self.output_file.Write()
@@ -301,11 +341,11 @@ class online_monitor:
             self.num_events[i].SetPoint(self.num_events[i].GetN(), ROOT.TDatime().Convert(), self.last_hits[i][0].trigger_id)
             if self.last_hits[i][0].trigger_id > max:
                 max = self.last_hits[i][0].trigger_id
-        self.num_events[i].GetYaxis().SetRangeUser(0, max * 1.2)
         for i in range(self.caen_units):
             if (max == 0):
                 continue
             self.missed_events[i].SetPoint(self.missed_events[i].GetN(), ROOT.TDatime().Convert(), 1 - (self.num_hits[i] / max))
+        self.num_events[0].GetYaxis().SetRangeUser(0, max * 1.2)
 
     def event_loop(self):
         with file_parser(self.file_path) as parser:
@@ -324,6 +364,10 @@ class online_monitor:
                 # print('reading')
                 self.num_hits[hits[0].board] += 1
                 for hit in hits:
+                    if hit.trigger_id not in self.events:
+                        self.events[hit.trigger_id] = event(hit.trigger_id)
+                    self.events[hit.trigger_id].add_hit(hit)
+
                     self.last_hits[hit.board][hit.channel] = hit
                     self.low_gain_histograms[hit.board][hit.channel].Fill(hit.low_gain)
                     self.high_gain_histograms[hit.board][hit.channel].Fill(hit.high_gain)
@@ -340,15 +384,23 @@ class online_monitor:
 
     def make_event_display(self):
         self.event_display.Reset()
-        for i in range(2):
-            for j in range(4):
-                self.event_display.Fill(0, i, j, 0)
-                self.event_display.Fill(66, i, j, 4096)
+        # for i in range(2):
+        #     for j in range(4):
+        #         self.event_display.Fill(0, i, j, 0)
+        #         self.event_display.Fill(66, i, j, 40000)
+        event_number = self.last_hits[0][0].trigger_id
+        while event_number not in self.events or self.events[event_number].is_complete_event() == False or self.events[event_number].max_adc < 500:
+            event_number -= 1
+            if event_number < 0:
+                return
+        event = self.events[event_number]
+        # print(type(event))
         for i in range(self.caen_units):
             for j in range(self.channels):
-                hit = self.last_hits[i][j]
-                # print(f'Filling ({x}, {y}, {z}) with {self.last_hits[i][j].high_gain}')
-                self.event_display.Fill(hit.z + 1, hit.x, hit.y, hit.comb_gain)
+                # print(f'Filling {i} {j}')
+                hit = event.hits[j + 64 * i]
+                if ((hit.board in (0, 1, 2, 3, 4, 7) and hit.comb_gain > 70) or (hit.board in (5, 6) and hit.comb_gain > 200)):
+                    self.event_display.Fill(hit.z + 1, hit.x, hit.y, hit.comb_gain)
         
 
     
@@ -357,10 +409,13 @@ def main(argv):
     signal.signal(signal.SIGINT, handle_stop_signal)
     # monitor = online_monitor('data/Run68_list.txt')
     run_number = argv[1]
+    ROOT.gStyle.SetOptStat(0)
     monitor = online_monitor(f'/home/lfhcal/Downloads/Janus_5202_3.6.0_20240514_linux/bin/DataFiles/Run{run_number}_list.txt', run_number)
     # monitor = online_monitor(f'data/Run{run_number}_list.txt')
     monitor.event_loop()
+    print("Closing file")
     monitor.close()
+    print("File closed")
     pass
 
 if __name__ == '__main__':
